@@ -1,0 +1,111 @@
+pipeline {
+
+    agent any
+
+    tools {
+        jdk 'jdk21'
+        nodejs 'node26'
+    }
+
+    environment {
+        SCANNER_HOME = tool 'Sonarqube-Scanner'
+    }
+
+    stages {
+
+        stage('Clean Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+
+        stage('Checkout from Git') {
+            steps {
+
+                git branch: 'main',
+                    url: 'https://github.com/Bhargavi-P2/Swiggy-clone.git'
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+
+                withSonarQubeEnv('SonarQube Servers') {
+
+                    sh '''
+                        $SCANNER_HOME/bin/sonar-scanner \
+                        -Dsonar.projectName=Swiggy-CI \
+                        -Dsonar.projectKey=Swiggy-CI
+                    '''
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+
+                script {
+                    waitForQualityGate abortPipeline: false
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh 'npm install'
+            }
+        }
+
+        stage('TRIVY FS SCAN') {
+            steps {
+
+                sh 'trivy fs . > trivyfs.txt'
+            }
+        }
+
+        stage('Docker Build & Push') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'dockerhub',
+                        passwordVariable: 'DOCKER_PASS',
+                        usernameVariable: 'DOCKER_USER'
+                    )]) {
+                        sh 'docker login -u $DOCKER_USER -p $DOCKER_PASS'
+                        sh 'docker build -t swiggy-clone .'
+                        sh 'docker tag swiggy-clone bhargavi486/swiggy-clone:latest'
+                        sh 'docker push bhargavi486/swiggy-clone:latest'
+                    }
+                }
+            }
+        }
+
+        stage('TRIVY IMAGE SCAN') {
+            steps {
+                sh 'trivy image bhargavi486/swiggy-clone:latest > trivyimage.txt'
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                script {
+                    dir('Kubernetes') {
+                        withKubeConfig(
+                            caCertificate: '',
+                            clusterName: '',
+                            contextName: '',
+                            credentialsId: 'kubernetes',
+                            namespace: '',
+                            restrictKubeConfigAccess: false,
+                            serverUrl: ''
+                        ) {
+                            sh 'kubectl get nodes'
+                            sh 'kubectl apply -f deployment.yml'
+                            sh 'kubectl apply -f service.yml'
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
